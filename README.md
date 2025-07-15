@@ -2,13 +2,13 @@
 This repository contains source code for replicating experiments for 
 Applied Soft Computing (special issue, Recommender Systems: Methodology Update) Journal.
 
-##### In case you plan to replicate experiments
+##### IN CASE YOU PLAN TO RUN EXPERIMENTS, EXECUTE THE FOLLOWING STEPS
 
-0.a. Download this repository and original datasets:
+0. (a). Download this repository and original data:
 - <https://github.com/igobrilhante/TripBuilder> (full)
 - <https://sites.google.com/site/yangdingqi/home/foursquare-dataset> (global-scale check-in dataset)
 
-0.b. Prepare `ascomp` directory structure and unpack data:
+0. (b). Prepare directory structure and unpack data:
 ```
 (ascomp)
 |-- data
@@ -64,7 +64,7 @@ Applied Soft Computing (special issue, Recommender Systems: Methodology Update) 
     `-- utils.py
 ```
 
-0.c. Run from `ascomp` directory:
+0. (c). Run:
 ```
 python3 src/proc_Flickr.py
 python3 src/proc_Foursquare.py
@@ -76,7 +76,7 @@ and apply Core-filtering.
 ```
 python3 -u src/run1.py --city Rome --seed_list 2025 2026 2027 2028 2029
 ```
-It will process Rome true user preferences for five different data partition seeds (2025--2029 in this case)
+It will process user preferences in Rome city for five different data partition seeds 
 and save results (`out/` dir) and corresponding training logs (`log/` dir) to disk. Change Rome to
 Florence, Pisa, Istanbul, and London (one at a time) in ordred to process other cities.
 
@@ -84,7 +84,7 @@ Florence, Pisa, Istanbul, and London (one at a time) in ordred to process other 
 ```
 ./run2.sh Rome
 ```
-It will estimate limited awareness set for each user and calibrate 
+It will estimate awareness set for each user, calibrate 
 multinomial choice model, and save results (`out/` dir) and corresponding 
 training logs (`log/` dir) to disk. Change Rome to Florence, Pisa, Istanbul, and London (one at a time) 
 in ordred to process other cities.
@@ -93,16 +93,8 @@ in ordred to process other cities.
 ```
 python3 -u src/runx_batch.py --city Rome --seed_list 2025 2026 2027 2028 2029
 ```
-This step will produce both: experiment artefacts (`.pk` files in `out/experiments/`) and experiment logs (`log/` dir). 
+This step will produce both: experiment artefacts (`.pk` files in `out/experiments/` dir) and experiment logs (`log/` dir). 
 Change Rome to Florence, Pisa, Istanbul, and London (one at a time) in ordred to process other cities.
 
-requirements.txt:
-```
-cornac==2.2.2
-h5py==3.12.1
-numba==0.61.0
-numpy==1.26.4
-optuna==4.3.0
-polars==1.22.0
-torch==2.4.0
-```
+
+4. Run `notebooks/plot.ipynb` to plot (some of) figures from the original paper.
