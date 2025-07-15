@@ -6,9 +6,9 @@ from datafactory import dump_lbsn_artefacts
 
 PART_MIN_DISTRIBUTED_ACTIVITY = 1.25  # average number of visited items per part of a tour
 PART_MAX_NUMS = 14                    # max number of part chunks a tourist can complete (otherwise a local)
-TOUR_MIN_USER_ACTIVITY = 5            # min number of visited items per tour
-TOUR_MAX_USER_ACTIVITY = 50           # max number of visited items per tour
-ITEM_MIN_FEEDBACK = 10                # control for niche items
+TOUR_MIN_USER_ACTIVITY = 3            # min number of visited items per tour
+TOUR_MAX_USER_ACTIVITY = 40           # max number of visited items per tour
+ITEM_MIN_FEEDBACK = 5                 # control for niche items
 
 
 if __name__ == "__main__":
@@ -124,10 +124,12 @@ if __name__ == "__main__":
         # --- populate choices and item coordinates
 
         y = np.zeros((N, J), dtype="i8")
+        t = np.zeros((N, J), dtype="i8")
         n = 0
         for user in tourist_data:
-            for item in tourist_data[user]["item_arr"]:
+            for item, tick in zip(tourist_data[user]["item_arr"], tourist_data[user]["time_arr"]):
                 y[n,item_to_rank[item]] = 1
+                t[n,item_to_rank[item]] = tick
             n += 1
 
         # ---
@@ -150,12 +152,14 @@ if __name__ == "__main__":
             good_user_ma = (TOUR_MIN_USER_ACTIVITY <= y.sum(1)) & (y.sum(1) <= TOUR_MAX_USER_ACTIVITY)
             good_item_ma = (ITEM_MIN_FEEDBACK <= y.sum(0))
             y = y[good_user_ma][:,good_item_ma]
+            t = t[good_user_ma][:,good_item_ma]
             location = location[good_item_ma,:]
 
         # --- do 2nd filter (popularity item reranking)
 
         pop_ranking_ix = np.argsort(-y.sum(axis=0))
         y = y[:,pop_ranking_ix]
+        t = t[:,pop_ranking_ix]
         location = location[pop_ranking_ix,:]
 
         # --- save
@@ -167,6 +171,7 @@ if __name__ == "__main__":
         dump_lbsn_artefacts(
             file=f"out/{city}_lbsn.hdf5",
             y=y,
+            t=t,
             f=f,
             fnames=fnames.astype("S8"),
             envstruct={

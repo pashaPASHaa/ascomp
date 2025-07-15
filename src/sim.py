@@ -1,8 +1,7 @@
 import time
 import numpy as np
 
-from datafactory import load_lbsn_artefacts, load_util_artefacts, load_aset_artefacts
-from environment import users_arrival_generator
+from datafactory import load_util_artefacts, load_aset_artefacts
 from recommender import do_planning, recommend_with_void_search_decoder
 from ubm import make_boltzman_choices
 from utils import argnonz
@@ -12,7 +11,6 @@ def simulate_1_day(
         lbsn_file: str,
         util_file: str,
         aset_file: str,
-        rate: float,
         args: dict[str,any],
 ):
     # -------------------------------------------------------------------------
@@ -28,7 +26,6 @@ def simulate_1_day(
     pack_size = args["pack_size"]
     salience_boost = args["salience_boost"]
     seed = args["seed"]
-    harm_collector_step = args["harm_collector_step"]  # how often collect harm
     disp_collector_step = args["disp_collector_step"]  # how often display info
     croi = args["croi"]
 
@@ -42,7 +39,7 @@ def simulate_1_day(
     #  |__ y
     #  |__ wmf: {"A": arr, "beta": arr, "gamma": arr, "u_thr": arr}
     #  |__ bpr: {"A": arr, "beta": arr, "gamma": arr, "u_thr": arr}
-    #  |__ xxx: {"A": arr, "beta": arr, "gamma": arr, "u_thr": arr}
+    #  |__ any: {"A": arr, "beta": arr, "gamma": arr, "u_thr": arr}
     # """
 
     y_true, A_map = load_aset_artefacts(aset_file)
@@ -63,63 +60,42 @@ def simulate_1_day(
     # -------------------------------------------------------------------------
 
     # init structure
-    void_harm = 0
-    cond_harm = 0
-    nors_harm = 0
-    data_harm = 0
-
     log = {
-        "void_user": [], "void_harm": [],
-        "cond_user": [], "cond_harm": [],
-        "nors_user": [], "nors_harm": [],
-        "data_user": [], "data_harm": [],
-        "n": [],
-        "void_choice_arr": np.zeros(J, dtype="i8"), "void_exposure_arr": np.zeros(J, dtype="i8"),
-        "cond_choice_arr": np.zeros(J, dtype="i8"), "cond_exposure_arr": np.zeros(J, dtype="i8"),
-        "nors_choice_arr": np.zeros(J, dtype="i8"),
-        "data_choice_arr": np.zeros(J, dtype="i8"),
+        "caus_user": np.zeros(N, dtype="f4"),
+        "caus_harm": np.zeros(N, dtype="i4"),
+        "nors_user": np.zeros(N, dtype="f4"),
+        "nors_harm": np.zeros(N, dtype="i4"),
+        "data_user": np.zeros(N, dtype="f4"),
+        "data_harm": np.zeros(N, dtype="i4"),
+        "n": np.zeros(N, dtype="i4"),
+        "caus_choice_arr": np.zeros(J, dtype="i4"), "caus_exposure_arr": np.zeros(J, dtype="i4"),
+        "nors_choice_arr": np.zeros(J, dtype="i4"),
+        "data_choice_arr": np.zeros(J, dtype="i4"),
     }
+    set_croi = set(croi)  # set of croi items, for fast set lookup & operations
+    np.random.seed(seed)  # fix seed
 
     # -------------------------------------------------------------------------
 
-    for t, act in users_arrival_generator(rate=rate, seed=seed):
+    for n in range(N):
 
         tic = time.time()
-
-        if not act:
-            continue
-
-        harm_ok = len(log["n"]) % harm_collector_step == 0
-        disp_ok = len(log["n"]) % disp_collector_step == 0
-
-        # ---------------------------------------------------------------------
-        # SAMPLE USER FROM POPULATION WITH CORRESPONDING NUMBER OF ITEMS TO SEE
-
-        n = np.random.randint(0, N)
-        log["n"] += [n]
-        need_size = y_true[n,:].sum()
 
         # ---------------------------------------------------------------------
         # RECOMMENDER SYSTEM FORESEES WHAT PACK TO RECOMMEND (AS A PROPOSITION)
 
-        void_pack = recommend_with_void_search_decoder(pred_user_preferences[n,:], advt_preferences, pack_size, lamb)
-        cond_pack = recommend_with_void_search_decoder(pred_user_preferences[n,:], advt_preferences, pack_size, lamb)
+        caus_pack = recommend_with_void_search_decoder(pred_user_preferences[n,:], advt_preferences, pack_size, lamb)
         nors_pack = np.array([], dtype="i8")
         # record recommendations
-        log["void_exposure_arr"][void_pack] += 1
-        log["cond_exposure_arr"][cond_pack] += 1
+        log["caus_exposure_arr"][caus_pack] += 1
 
         # ---------------------------------------------------------------------
         # USER REACTS TO PROPOSED RECOMMENDATION PACK AND FOLLOWS THE ITINERARY
 
-        anset = argnonz(A[n,:])
+        anset, need_size = argnonz(A[n,:]), y_true[n,:].sum()
 
-        boost = np.where(np.isin(np.arange(J), void_pack), salience_boost, 0.0)
-        accepted_void_pack = make_boltzman_choices(true_user_preferences[n,:] + boost, void_pack, anset,
-                                                   need_size, beta[n], gamma[n], u_thr[n])
-
-        boost = np.where(np.isin(np.arange(J), cond_pack), salience_boost, 0.0)
-        accepted_cond_pack = make_boltzman_choices(true_user_preferences[n,:] + boost, cond_pack, anset,
+        boost = np.where(np.isin(np.arange(J), caus_pack), salience_boost, 0.0)
+        accepted_caus_pack = make_boltzman_choices(true_user_preferences[n,:] + boost, caus_pack, anset,
                                                    need_size, beta[n], gamma[n], u_thr[n])
 
         boost = 0
@@ -131,52 +107,40 @@ def simulate_1_day(
         # -----------------------------
 
         # made choices increment
-        log["void_choice_arr"][accepted_void_pack] += 1
-        log["cond_choice_arr"][accepted_cond_pack] += 1
+        log["caus_choice_arr"][accepted_caus_pack] += 1
         log["nors_choice_arr"][accepted_nors_pack] += 1
         log["data_choice_arr"][accepted_data_pack] += 1
 
         # -----------------------------
 
-        void_user = np.sum(true_user_preferences[n,accepted_void_pack])
-        cond_user = np.sum(true_user_preferences[n,accepted_cond_pack])
+        caus_user = np.sum(true_user_preferences[n,accepted_caus_pack])
         nors_user = np.sum(true_user_preferences[n,accepted_nors_pack])
         data_user = np.sum(true_user_preferences[n,accepted_data_pack])
         # record utilities
-        log["void_user"].append(void_user)
-        log["cond_user"].append(cond_user)
-        log["nors_user"].append(nors_user)
-        log["data_user"].append(data_user)
+        log["caus_user"][n] = caus_user
+        log["nors_user"][n] = nors_user
+        log["data_user"][n] = data_user
+        log["caus_harm"][n] = len(set(accepted_caus_pack) & set_croi)
+        log["nors_harm"][n] = len(set(accepted_nors_pack) & set_croi)
+        log["data_harm"][n] = len(set(accepted_data_pack) & set_croi)
 
-        # -----------------------------
-
-        if harm_ok:
-            void_harm = np.sum(log["void_choice_arr"][croi])
-            cond_harm = np.sum(log["cond_choice_arr"][croi])
-            nors_harm = np.sum(log["nors_choice_arr"][croi])
-            data_harm = np.sum(log["data_choice_arr"][croi])
-            # record utilities
-            log["void_harm"].append(void_harm)
-            log["cond_harm"].append(cond_harm)
-            log["nors_harm"].append(nors_harm)
-            log["data_harm"].append(data_harm)
+        # record user index
+        log["n"][n] = n
 
         # -----------------------------
 
         toc = time.time()
 
-        if disp_ok:
+        if (n % disp_collector_step) == 0:
             print(
-                f"{len(log['n']):>05d} | {n:>04d} | {toc-tic:>6.4f} sec  k={need_size:>2d}"
-                f"  |vcn|  "
+                f"{n:>04d} | {toc-tic:>6.4f} sec  k={need_size:>2d}"
+                f"  |tn|  "
                 f"util= "
-                f"{void_user:>5.2f}  "
-                f"{cond_user:>5.2f}  "
+                f"{caus_user:>5.2f}  "
                 f"{nors_user:>5.2f}  |  "
                 f"harm= "
-                f"{void_harm:>6.0f}  "
-                f"{cond_harm:>6.0f}  "
-                f"{nors_harm:>6.0f}  "
+                f"{np.sum(log['caus_harm']):>6.0f}  "
+                f"{np.sum(log['nors_harm']):>6.0f}  "
             )
 
     return {key: np.asarray(val) for key, val in log.items()}
@@ -189,9 +153,9 @@ if __name__ == "__main__":
     # -------------------------------->
 
     path = os.path.dirname(os.path.realpath(__file__))
-    lbsn_file = os.path.join(path, f"../../out/Rome_lbsn.hdf5")
-    util_file = os.path.join(path, f"../../out/Rome_util.hdf5")
-    aset_file = os.path.join(path, f"../../out/Rome_aset.hdf5")
+    lbsn_file = os.path.join(path, f"../out/Pisa_lbsn.hdf5")
+    util_file = os.path.join(path, f"../out/Pisa_2026_util.hdf5")
+    aset_file = os.path.join(path, f"../out/Pisa_2026_aset.hdf5")
 
     # -------------------------------->
 
@@ -203,7 +167,6 @@ if __name__ == "__main__":
         lbsn_file,
         util_file,
         aset_file,
-        rate=2.0,
         args={
             "key": "bpr",
             "recommender_system_key": ("wmf", "4"),
@@ -211,7 +174,6 @@ if __name__ == "__main__":
             "pack_size": 8,
             "salience_boost": 0.01,
             "seed": 1,
-            "harm_collector_step": 1,
             "disp_collector_step": 1,
             "croi": croi,
         }

@@ -3,7 +3,7 @@ import h5py
 import numpy as np
 
 
-def dump_lbsn_artefacts(file: str, y: np.ndarray, f: np.ndarray, fnames: np.ndarray, envstruct: dict, _str: str = "S8"):
+def dump_lbsn_artefacts(file: str, y: np.ndarray, t: np.ndarray, f: np.ndarray, fnames: np.ndarray, envstruct: dict, _str: str = "S8"):
 
     assert len(f) == len(fnames), "Shape mismatch"
 
@@ -20,6 +20,7 @@ def dump_lbsn_artefacts(file: str, y: np.ndarray, f: np.ndarray, fnames: np.ndar
         o["/environment"].create_dataset("time_required", dtype="i8", data=envstruct["time_required"])
         # create users and items storage
         o["/"].create_dataset("y", dtype="i8", data=y)
+        o["/"].create_dataset("t", dtype="i8", data=t)  # Unix epoch time
         o["/"].create_dataset("f", dtype="f8", data=f)
         o["/"].create_dataset("fnames", dtype=_str, data=fnames)
     print(f"Dumped successfully lbsn artefacts ==> {os.path.basename(file)}")
@@ -39,11 +40,12 @@ def load_lbsn_artefacts(file: str, _str: str = "U"):
         }
         # read users and items storage
         y = o["/y"][...].astype("i8")
+        t = o["/t"][...].astype("i8")
         f = o["/f"][...].astype("f8")
         fnames = o["/fnames"].asstr()[...].astype(_str)
     print(f"Loaded successfully lbsn artefacts <== {os.path.basename(file)}")
 
-    return y, f, fnames, envstruct
+    return y, t, f, fnames, envstruct
 
 
 def dump_util_artefacts(file: str, true_data_map: dict[str,np.ndarray], pred_data_map: dict[str,dict[str,np.ndarray]]):
@@ -63,7 +65,7 @@ def dump_util_artefacts(file: str, true_data_map: dict[str,np.ndarray], pred_dat
             )
         # populate pred storage
         for key, arr in pred_data_map.items():
-            print(f"Processing data storage with key [{key:<5}]...", end=" ")
+            print(f"Processing data storage with key [{key:<7}]...", end=" ")
             o["/pred"].create_group(key)
             for t_key, t_arr in arr.items():
                 o[f"/pred/{key}"].create_dataset(
@@ -99,7 +101,7 @@ def load_util_artefacts(file: str):
             true_data_map[key] = arr[...]
         # read pred storage
         for key, arr in o["/pred"].items():
-            print(f"Processing data storage with key [{key:<5}]...", end=" ")
+            print(f"Processing data storage with key [{key:<7}]...", end=" ")
             pred_data_map[key] = {t_key: t_arr[...]
                                   for (t_key, t_arr) in arr.items()}
             print(f"DONE.")
@@ -136,7 +138,7 @@ def load_aset_artefacts(file: str):
         y = o["/y"][...].astype("i8")
         for key, arr in o["/"].items():
             if key != "y":
-                print(f"Processing data storage with key [{key:<5}]...", end=" ")
+                print(f"Processing data storage with key [{key:<7}]...", end=" ")
                 A_map[key] = {t_key: t_arr[...]
                               for (t_key, t_arr) in arr.items()}
                 print(f"DONE.")

@@ -1,7 +1,6 @@
 ### Positive-Sum Impact of Multistakeholder Recommendations for Urban Tourism
 This repository contains source code for replicating experiments for the 
-Applied Soft Computing (special issue, Recommender Systems: 
-Methodology Update) journal.
+Applied Soft Computing (special issue, Recommender Systems: Methodology Update) journal.
 
 ##### In case you plan to replicate experiments
 
@@ -43,76 +42,68 @@ Prepare `ascomp` directory structure and unpack data:
 |           |-- rome-pois.txt
 |           `-- rome-trajectories.txt
 |-- log
+|-- notebooks
+    `-- plot.ipynb
 |-- out
-|-- run1_F.sh
-|-- run1_I.sh
-|-- run1_R.sh
-|-- run2_F.sh
-|-- run2_I.sh
-|-- run2_R.sh
+|-- run2.sh
 `-- src
-    `-- exp
-        |-- __init__.py
-        |-- collaborative_filtering.py
-        |-- datafactory.py
-        |-- environment.py
-        |-- proc_Flickr.py
-        |-- proc_Foursquare.py
-        |-- recommender.py
-        |-- run1.py
-        |-- run2.py
-        |-- runx.py
-        |-- runx_batch.py
-        |-- sim.py
-        |-- ubm.py
-        `-- utils.py
+    |-- __init__.py
+    |-- collaborative_filtering.py
+    |-- datafactory.py
+    |-- proc_Flickr.py
+    |-- proc_Foursquare.py
+    |-- recommender.py
+    |-- run1.py
+    |-- run1_co.py
+    |-- run1_rb.py
+    |-- run1_recbole.py
+    |-- run2.py
+    |-- runx.py
+    |-- runx_batch.py
+    |-- sim.py
+    |-- ubm.py
+    `-- utils.py
 ```
 
 0. Run from `ascomp` directory:
 ```
-python3 src/exp/proc_Flickr.py
-python3 src/exp/proc_Foursquare.py
+python3 src/proc_Flickr.py
+python3 src/proc_Foursquare.py
 ```
 It will process source data, separate local residents from tourists, 
 and apply Core-filtering.
 
 1. Run:
 ```
-./run1_R.sh
-./run1_F.sh
-./run1_I.sh
+python3 -u src/run1.py --city Rome --seed_list 2025 2026 2027 2028 2029
 ```
-In a sequence, or parallel from different terminal screens.
-It will process Rome (R), Florence (F), and Istanbul (I) true user preferences 
-and save results (`out/` dir) and corresponding training logs (`log/` dir) to disk. 
+It will process Rome true user preferences for five different data partition seeds (2025--2029 in this case)
+and save results (`out/` dir) and corresponding training logs (`log/` dir) to disk. Change Rome to
+Florence, Pisa, Istanbul, and London (one at a time) in ordred to process other cities.
 
 2. Run:
 ```
-./run2_R.sh
-./run2_F.sh
-./run2_I.sh
+./run2.sh Rome
 ```
-In a sequence, or parallel from different terminal screens.
 It will estimate limited awareness set for each user and calibrate 
 multinomial choice model, and save results (`out/` dir) and corresponding 
-training logs (`log/` dir) to disk.
+training logs (`log/` dir) to disk. Change Rome to Florence, Pisa, Istanbul, and London (one at a time) 
+in ordred to process other cities.
 
 3. Run:
 ```
-python3 src/exp/runx_batch.py --city Rome
-python3 src/exp/runx_batch.py --city Florence
-python3 src/exp/runx_batch.py --city Istanbul
+python3 -u src/runx_batch.py --city Rome --seed_list 2025 2026 2027 2028 2029
 ```
-(sequentially!) because each run is already executed in 
-parallel and consumes 24GB of RAM memory. This step will produce both: 
-experiment artefacts (`.pk` files in `out/experiments/`) 
-and experiment logs (`log/` dir).
+This step will produce both: experiment artefacts (`.pk` files in `out/experiments/`) and experiment logs (`log/` dir). 
+Change Rome to Florence, Pisa, Istanbul, and London (one at a time) in ordred to process other cities.
 
 requirements.txt:
 ```
-cornac==2.1.0
-h5py==3.10.0
-numba==0.59.1
+cornac==2.2.2
+h5py==3.12.1
+numba==0.61.0
 numpy==1.26.4
-polars==0.20.18
+optuna==4.3.0
+polars==1.22.0
+torch==2.4.0
 ```

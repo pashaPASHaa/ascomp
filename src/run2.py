@@ -27,7 +27,8 @@ from utils import argnonz, argtopk, myrecall, rand_member_arr_nb, seedutils
 """
 
 
-beta_max = gamma_max = 8.0
+TOPK_ALL = 10  # number of top items known for every user
+beta_max = gamma_max = 5.0
 
 
 @jax.jit
@@ -67,7 +68,7 @@ def learn_PIAL(y, u, u_thr, P_aset, te_y):
 
     # -------------------------------------------------------------------------
 
-    n_epochs = 10000
+    n_epochs = 5000
     n_epochs_print = 1000
 
     params = {
@@ -79,8 +80,8 @@ def learn_PIAL(y, u, u_thr, P_aset, te_y):
     # step decay lr sheduler: lr = warmup + 1e-2 * (0.8)**(count//2500)
     # maps count to lr
     lr = optax.warmup_exponential_decay_schedule(
-        init_value=1e-3,
-        peak_value=1e-2, warmup_steps=1000, transition_steps=1000, decay_rate=0.8, staircase=True, end_value=1e-3,
+        init_value=5e-4,
+        peak_value=5e-3, warmup_steps=1000, transition_steps=1000, decay_rate=0.8, staircase=True, end_value=5e-4,
     )
     # optimizer
     chain = optax.chain(
@@ -121,56 +122,61 @@ def learn_PIAL(y, u, u_thr, P_aset, te_y):
     return learned_params, tr_llik, te_llik
 
 
-def learn(y, u, pop_lamb, delta, topk, te_y):
+def learn(y, iou_mat, u, pop_lamb, delta, te_y):
 
     assert len(y) == len(te_y), "Each user has to be presented both in train and test splits"
 
-    N = len(y)
-    P_pop = y.sum(0) / y.sum(0).max()
-    P_knn = get_knn_modulated_awareness_distribution(y, u, delta, topk)
+    N = y.shape[0]
+    J = y.shape[1]
+    # estimate probability based on crowd behaviour with pseudocount correction
+    P_pop = (y.sum(0) + 1) / (N+1)
+    P_knn = get_knn_modulated_awareness_distribution(y, iou_mat, delta)
     # estimate probability to get known about item j
     P_aset = pop_lamb * P_pop + (1-pop_lamb) * P_knn
 
     # estimate two-stage choice model parameters
     learned_params, tr_llik, te_llik = learn_PIAL(y, u, np.min(u, where=(y == 1), axis=1, initial=np.inf), P_aset, te_y)
 
-    # estimate consideration set
+    # estimate awareness set
     A = np.zeros(y.shape, dtype="i8")
     for n in range(N):
         # sample from an awareness distribution
         # guarantee that y in A
         A[n,np.random.random(J) < P_aset[n,:]+y[n,:]] = 1
+    # add topk items guaranteed in A due to their everywhere popularity
+    A[:,:TOPK_ALL] = 1
 
     return learned_params, A, P_aset, tr_llik, te_llik
 
 
-@njit((i8[::1], i8[:,::1], f8))
-def get_neighbours(q, Q, similarity_thr):  # --> find neighbours and neighbours similarities w.r.t. given `q` query
-    N = len(Q)
-    similarity = np.empty(N, dtype="f8")
-    for n in range(N):
-        similarity[n] = myrecall(q, Q[n,:])
-    neighbours = argnonz(
-        similarity >=
-        similarity_thr
-    )
-    return neighbours, similarity[neighbours]
+@njit((i8[:,::1],))
+def iou(y):
+    y = y > 0  # --> to binary matrix
+    N = y.shape[0]
+    J = y.shape[1]
+    S = np.zeros(shape=(N, N), dtype="f8")
+    for i in range(N):
+        for j in range(N):
+            if j < i:
+                continue
+            a = y[i]
+            b = y[j]
+            inter = np.sum(a & b)
+            union = np.sum(a | b)
+            S[i,j] = S[j,i] = (inter / union) if (union > 0) else 0.0
+    return S
 
 
-@njit((i8[:,::1], f8[:,::1], f8, i8))
-def get_knn_modulated_awareness_distribution(y, u, delta, topk):  # --> awareness distribution
-
-    N = len(y)
-    P = np.empty(y.shape, dtype="f8")
-    u_argtopk = np.empty((N, topk), dtype="i8")
-    for n in range(N):
-        u_argtopk[n,:] = argtopk(u[n,:], k=topk)  # unsorted topk! items
-
+@njit((i8[:,::1], f8[:,::1], f8))
+def get_knn_modulated_awareness_distribution(y, iou_mat, delta):  # --> awareness distribution
+    N = y.shape[0]
+    J = y.shape[1]
+    P = np.empty(shape=(N,J), dtype="f8")
+    b = np.empty(shape=(N, ), dtype=np.bool_)
     eps = 1e-4
     for n in range(N):
-        neighbours, _ = get_neighbours(u_argtopk[n,:], u_argtopk, similarity_thr=delta)
-        P[n,:] = np.divide(
-            np.sum(y[neighbours], axis=0), len(neighbours) + eps)
+        b[:] = iou_mat[n,:] >= delta
+        P[n,:] = np.divide( np.sum(y[b,:], axis=0) + eps, b.sum() + 2*eps )
     return P
 
 
@@ -234,7 +240,7 @@ if __name__ == "__main__":
 
     print(f"Detected script configuration for synthetic awareness set estimation protocol:\n"
           f"topk={args.topk} "
-          f"seed={args.seed} ")
+          f"seed={args.seed} ", flush=True)
 
     # -------------------------------------------------------------------------
 
@@ -243,7 +249,6 @@ if __name__ == "__main__":
     seedutils(args.seed)
     # load file
     true_data_map, _ = load_util_artefacts(args.util_artefacts_file)
-    N, J = true_data_map["y"].shape
 
     # -------------------------------------------------------------------------
 
@@ -255,37 +260,50 @@ if __name__ == "__main__":
     # estimation is based on a sampling process from a probabilistic model: P(C|A)*P(A)
     # with respect to oracle preferences and multinomial choice behavioural constraints
 
+    # -------------------------------------------------------------------------
+
+    y = true_data_map["y"]  # {0,1} observations
+    N = y.shape[0]
+    J = y.shape[1]
+
+    # split data
+    tr_y = np.zeros(y.shape, dtype="i8")
+    te_y = np.zeros(y.shape, dtype="i8")
+    tr_frac = 0.67
+    for n in range(N):
+        pos = argnonz(y[n,:])
+        tr_pos = rand_member_arr_nb(pos, size=max(1, int(len(pos) * tr_frac)))
+        te_pos = np.setdiff1d(pos, tr_pos)
+        tr_y[n,tr_pos] = 1
+        te_y[n,te_pos] = 1
+    assert np.array_equal(y, tr_y+te_y), "Wrong split"
+    tr_iou_mat = iou(tr_y)
+
+    # -------------------------------------------------------------------------
+
     for key in true_data_map:
 
         if key == "y":
             continue
         print(f"\nSet recommendation key={key} as a ground truth of [un]biased preferences")
 
-        y = true_data_map["y"]  # {0,1} observations
         u = true_data_map[key]  # oracle preferences
-
-        # split data
-        N = len(y)
-        tr_y = np.zeros(y.shape, dtype="i8")
-        te_y = np.zeros(y.shape, dtype="i8")
-        tr_frac = 0.5
-        for n in range(N):
-            pos = argnonz(y[n,:])
-            tr_pos = rand_member_arr_nb(pos, size=max(1, int(len(pos) * tr_frac)))
-            te_pos = np.setdiff1d(pos, tr_pos)
-            tr_y[n,tr_pos] = 1
-            te_y[n,te_pos] = 1
-        assert np.array_equal(y, tr_y+te_y), "Wrong split"
 
         # params search
         best_score = best_pop_lamb = best_delta = -np.inf
 
-        for pop_lamb in [0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
+        for pop_lamb in [0.1, 0.3, 0.5, 0.7, 0.9]:
             for delta in [0.1, 0.3, 0.5, 0.7, 0.9]:
                 print(f"pop_lamb={pop_lamb:.2f} delta={delta:.2f}")
 
                 _, _, _, tr_llik, te_llik = learn(
-                    y=tr_y, u=u, pop_lamb=pop_lamb, delta=delta, topk=args.topk, te_y=te_y)
+                    y=tr_y,
+                    iou_mat=tr_iou_mat,
+                    u=u,
+                    pop_lamb=pop_lamb,
+                    delta=delta,
+                    te_y=te_y,
+                )
 
                 if (te_llik > best_score):
                     best_pop_lamb = pop_lamb
@@ -301,7 +319,13 @@ if __name__ == "__main__":
         # retraining with the best parameters
         print(f"Awareness set and consideration set estimation INIT.")
         best_learned_params, best_A, best_P_aset, best_llik, _ = learn(
-            y=y, u=u, pop_lamb=best_pop_lamb, delta=best_delta, topk=args.topk, te_y=y)
+            y=y,
+            iou_mat=iou(y),
+            u=u,
+            pop_lamb=best_pop_lamb,
+            delta=best_delta,
+            te_y=y,
+        )
         print(f"Awareness set and consideration set estimation DONE. Retrained llik={best_llik:8.4f}")
 
         check_data(y=y, u=u, A=best_A)
@@ -309,7 +333,7 @@ if __name__ == "__main__":
         A_map[key] = {
             "A"      : best_A,
             "P_aset" : best_P_aset,
-            "beta"   : best_learned_params["beta"],
+            "beta"   : best_learned_params["beta" ],
             "gamma"  : best_learned_params["gamma"],
             "u_thr"  : best_learned_params["u_thr"],
         }

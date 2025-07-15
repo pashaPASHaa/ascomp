@@ -29,7 +29,7 @@ def recommend_with_void_search_decoder(
     assert (0 <= lamb <= 1), "Lambda is out of range!"
 
     # estimate gumbel standard deviation
-    _RERANKING_BETA = 0.001 * (6**0.5 / np.pi)
+    _RERANKING_BETA = 0.01 * (6**0.5 / np.pi)
 
     # estimate gumbel noise
     _r = _RERANKING_BETA * (-1) * np.log(-np.log( np.random.random(size=len(user_preferences)) ))

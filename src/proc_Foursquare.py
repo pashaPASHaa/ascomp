@@ -9,9 +9,9 @@ from utils import haversine
 PART_TAU = 8                          # max time (hours) threshold to build part of a tour
 PART_MIN_DISTRIBUTED_ACTIVITY = 1.25  # average number of visited items per part of a tour
 PART_MAX_NUMS = 14                    # max number of part chunks a tourist can complete (otherwise a local)
-TOUR_MIN_USER_ACTIVITY = 5            # min number of visited items per tour
-TOUR_MAX_USER_ACTIVITY = 50           # max number of visited items per tour
-ITEM_MIN_FEEDBACK = 10                # control for niche items
+TOUR_MIN_USER_ACTIVITY = 3            # min number of visited items per tour
+TOUR_MAX_USER_ACTIVITY = 40           # max number of visited items per tour
+ITEM_MIN_FEEDBACK = 5                 # control for niche items
 
 
 @njit(
@@ -85,14 +85,13 @@ if __name__ == "__main__":
 
     # --- city of interest (city_name, coutry_code, city_radius_km)
 
-    city_arr = [
-        ("Barcelona", "ES", 8),
-        ("Copenhagen", "DK", 5),
-        ("Istanbul", "TR", 12),
-        ("London", "GB", 12),
-        ("Lisbon", "PT", 5),
-        ("Paris", "FR", 6),
-    ]
+    # "Barcelona", "ES"  # --> 4 km (touristic radius), 6 km (city urban radius)
+    # "London",    "GB"  # --> 7 km, 20 km
+    # "Rome",      "IT"  # --> 5 km, 20 km
+    # "Florence",  "IT"  # --> 2 km,  5 km
+    # "Istanbul",  "TR"  # --> 7 km, 25 km
+
+    city_arr = [("Barcelona", "ES",  4), ("London", "GB", 7), ("Istanbul", "TR", 7)]
 
     # --- load data
 
@@ -267,10 +266,12 @@ if __name__ == "__main__":
         # --- populate choices and item coordinates
 
         y = np.zeros((N, J), dtype="i8")
+        t = np.zeros((N, J), dtype="i8")
         n = 0
         for user in tourist_data:
-            for item in tourist_data[user]["tour_item_arr"]:
+            for item, tick in zip(tourist_data[user]["tour_item_arr"], tourist_data[user]["tour_time_arr"]):
                 y[n,item_to_rank[item]] = 1
+                t[n,item_to_rank[item]] = int(tick.timestamp())
             n += 1
 
         location = np.zeros((J, 2), dtype="f8")
@@ -281,16 +282,20 @@ if __name__ == "__main__":
 
         # --- do 1st filter (outliers)
 
-        for _ in range(5):
-            good_user_ma = (TOUR_MIN_USER_ACTIVITY <= y.sum(1)) & (y.sum(1) <= TOUR_MAX_USER_ACTIVITY)
-            good_item_ma = (ITEM_MIN_FEEDBACK <= y.sum(0))
-            y = y[good_user_ma][:,good_item_ma]
-            location = location[good_item_ma,:]
+        good_item_ma = (ITEM_MIN_FEEDBACK <= y.sum(0))
+        y = y[:,good_item_ma]
+        t = t[:,good_item_ma]
+        location = location[good_item_ma,:]
+
+        good_user_ma = (TOUR_MIN_USER_ACTIVITY <= y.sum(1)) & (y.sum(1) <= TOUR_MAX_USER_ACTIVITY)
+        y = y[good_user_ma]
+        t = t[good_user_ma]
 
         # --- do 2nd filter (popularity item reranking)
 
         pop_ranking_ix = np.argsort(-y.sum(axis=0))
         y = y[:,pop_ranking_ix]
+        t = t[:,pop_ranking_ix]
         location = location[pop_ranking_ix,:]
 
         # --- save
@@ -302,6 +307,7 @@ if __name__ == "__main__":
         dump_lbsn_artefacts(
             file=f"out/{city}_lbsn.hdf5",
             y=y,
+            t=t,
             f=f,
             fnames=fnames.astype("S8"),
             envstruct={

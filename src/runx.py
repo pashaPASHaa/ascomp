@@ -13,7 +13,6 @@ def run_experiment(  # --> high level configuration for `simulate_1_day` experim
         lbsn_file: str,
         util_file: str,
         aset_file: str,
-        rate: float,
         args: dict[str,any],  # params to variate in experiment
 ):
 
@@ -22,7 +21,6 @@ def run_experiment(  # --> high level configuration for `simulate_1_day` experim
           f"key={args['key']} "
           f"recommender_system_key={args['recommender_system_key']} "
           f"salience_boost={args['salience_boost']:.2f} "
-          f"rate={rate:.2f} "
           f"\n")
 
     experiment: dict[str,dict|list] = {
@@ -39,7 +37,6 @@ def run_experiment(  # --> high level configuration for `simulate_1_day` experim
             lbsn_file,
             util_file,
             aset_file,
-            rate=rate,
             args={
                 "key": args["key"],
                 "recommender_system_key": args["recommender_system_key"],
@@ -47,37 +44,29 @@ def run_experiment(  # --> high level configuration for `simulate_1_day` experim
                 "pack_size": 8,
                 "salience_boost": args["salience_boost"],
                 "seed": args["seed"],
-                "harm_collector_step": 1000,
                 "disp_collector_step": 1000,
                 "croi": args["croi"],
             }
         )
-        # per user uplift
-        void_user = hist["void_user"]
+        caus_user = hist["caus_user"]
         nors_user = hist["nors_user"]
         data_user = hist["data_user"]
-        improvement_user = np.mean((void_user - nors_user) / nors_user)
+        caus_harm = hist["caus_harm"]
+        nors_harm = hist["nors_harm"]
+        data_harm = hist["data_harm"]
 
-        # environmental cumulative sustainable uplift
-        void_harm = hist["void_harm"][-1]
-        nors_harm = hist["nors_harm"][-1]
-        data_harm = hist["data_harm"][-1]
-        improvement_harm = (-1) * ((void_harm - nors_harm) / nors_harm)
-
-        # simulation bias
+        # uplift & simulation bias
+        improvement_user      = np.mean((caus_user - nors_user) / nors_user)
         bias_improvement_user = np.mean((nors_user - data_user) / data_user)
-        bias_improvement_harm = (-1) * ((nors_harm - data_harm) / data_harm)
+        improvement_harm      = (-1) * (np.sum(caus_harm) - np.sum(nors_harm)) / np.sum(nors_harm)
+        bias_improvement_harm = (-1) * (np.sum(nors_harm) - np.sum(data_harm)) / np.sum(data_harm)
 
         # update
         experiment["improvement_user"].append(improvement_user)
         experiment["improvement_harm"].append(improvement_harm)
         experiment["bias_improvement_user"].append(bias_improvement_user)
         experiment["bias_improvement_harm"].append(bias_improvement_harm)
-        experiment["hist"].append({
-            __k: hist[__k] for __k in ("void_choice_arr",
-                                       "nors_choice_arr",
-                                       "data_choice_arr", "void_exposure_arr")
-        })
+        experiment["hist"].append(hist)
 
         print(f"---------------------------------\n"
               f"lamb={lamb:.4f} | "
@@ -111,7 +100,7 @@ if __name__ == "__main__":
     # -------------------------------------------------------------------------
 
     # load dataset with lsbn trajectories and environment structure
-    y, _, _, envstruct = load_lbsn_artefacts(args.lbsn_artefacts_file)
+    y, _, _, _, envstruct = load_lbsn_artefacts(args.lbsn_artefacts_file)
     city_centre = envstruct["city_centre"]
     city_radius = envstruct["city_radius"]
     size = y.shape[1]
@@ -130,17 +119,16 @@ if __name__ == "__main__":
 
     # -------------------------------------------------------------------------
 
-    lamb_arr = np.linspace(0.0, 1.0, 101)  # uniform DOM[0:1]
+    lamb_arr = np.linspace(0.0, 1.0, 51)  # uniform DOM[0:1]
 
     # -------------------------------------------------------------------------
 
     experiment_arr = {}
-    for t_gathered in (2, 3, 4, 5, 50):
+    for t_gathered in (2, 3, 4, 50):
         experiment = run_experiment(
             args.lbsn_artefacts_file,
             args.util_artefacts_file,
             args.aset_artefacts_file,
-            rate=13,
             args={"key": f"{args.key}",
                   "recommender_system_key": (f"{args.recommender_system_key}", f"{t_gathered}"),
                   "croi": croi,

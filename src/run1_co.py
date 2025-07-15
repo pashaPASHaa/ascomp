@@ -7,8 +7,8 @@ from collaborative_filtering import _vae, _vae_search_space, _vae_search_space_t
 from collaborative_filtering import _wmf, _wmf_search_space, _wmf_search_space_tied_constraints
 from collaborative_filtering import _bpr, _bpr_search_space, _bpr_search_space_tied_constraints
 from collaborative_filtering import _ease, _ease_search_space, _ease_search_space_tied_constraints
-from collaborative_filtering import _ngcf, _ngcf_search_space, _ngcf_search_space_tied_constraints
-from collaborative_filtering import SEED, formatdict
+from collaborative_filtering import _lgcn, _lgcn_search_space, _lgcn_search_space_tied_constraints
+from collaborative_filtering import formatdict
 from collaborative_filtering import hsearch, prepare_positive_feedback_data, prepare_and_split_positive_feedback_data
 from datafactory import load_lbsn_artefacts, dump_util_artefacts
 from utils import argnonz, argtopk, myrecall, rand_choice_arr_nb, seedutils
@@ -16,20 +16,20 @@ from utils import argnonz, argtopk, myrecall, rand_choice_arr_nb, seedutils
 
 # all implicit collaborative filtering (CF) algorithms to consider
 CF_map = {
+    "lgcn": _lgcn,
+    "ease": _ease,
     "pop": _pop,
     "vae": _vae,
     "wmf": _wmf,
     "bpr": _bpr,
-    "ngcf": _ngcf,
-    "ease": _ease,
 }
 CF_search_space_map = {
+    "lgcn": (_lgcn_search_space, _lgcn_search_space_tied_constraints),
+    "ease": (_ease_search_space, _ease_search_space_tied_constraints),
     "pop": (_pop_search_space, _pop_search_space_tied_constraints),
     "vae": (_vae_search_space, _vae_search_space_tied_constraints),
     "wmf": (_wmf_search_space, _wmf_search_space_tied_constraints),
     "bpr": (_bpr_search_space, _bpr_search_space_tied_constraints),
-    "ngcf": (_ngcf_search_space, _ngcf_search_space_tied_constraints),
-    "ease": (_ease_search_space, _ease_search_space_tied_constraints),
 }
 
 
@@ -59,19 +59,20 @@ if __name__ == "__main__":
 
     # -------------------------------------------------------------------------
 
-    # python3 run1.py --help
+    # python3 run1_co.py --help
     parser = argparse.ArgumentParser(description="Synthetic preference estimation protocol")
     parser.add_argument("--lbsn_artefacts_file", type=str, required=True, help="file with LBSN itineraries")
     parser.add_argument("--util_artefacts_file", type=str, required=True, help="file output")
+    parser.add_argument("--seed", type=int, required=True, help="seed")
     args = parser.parse_args()
 
     # -------------------------------------------------------------------------
 
     # reproducibility
-    np.random.seed(SEED)
-    seedutils(SEED)
+    np.random.seed(args.seed)
+    seedutils(args.seed)
     # load file
-    y, _, _, _ = load_lbsn_artefacts(args.lbsn_artefacts_file)  # y[n,j] = {0,1}
+    y, _, _, _, _ = load_lbsn_artefacts(args.lbsn_artefacts_file)  # y[n,j] = {0,1}
     # data configuration: n_users, n_items
     N, J = y.shape
     # distribution for t-feedback sampling
@@ -87,12 +88,18 @@ if __name__ == "__main__":
     uid_map = collections.OrderedDict([(n, n) for n in range(N)])  # orig user id (any) --> internal user idx (int)
     iid_map = collections.OrderedDict([(j, j) for j in range(J)])  # orig item id (any) --> internal item idx (int)
 
+    # containers with artefacts
+    CF_true_data_map: dict[str,np.ndarray] = {"y": y}
+
+    # make data for preference estimation
+    true_data = prepare_positive_feedback_data(y, uid_map, iid_map, seed=args.seed)
+
     # -------------------------------------------------------------------------
 
     print(f"\nHYPERPARAMETERS SEARCH\n")
 
     # make data split
-    tr_data, te_data = prepare_and_split_positive_feedback_data(y, uid_map, iid_map, te_frac=0.33)
+    tr_data, te_data = prepare_and_split_positive_feedback_data(y, uid_map, iid_map, seed=args.seed, te_frac=0.33)
 
     # find the best hyperparameters
     CF_best_params_map: dict[str,dict] = {}
@@ -105,10 +112,11 @@ if __name__ == "__main__":
             te_data,
             gridsearch=True)
         print(f"Search for {key} DONE. recall={best_recall:.4f} params={formatdict(CF_best_params_map[key])}")
+        # compute preference vectors for each user
+        CF_true_data_map[key] = get_U(best_recsys, true_data)  # <-- will be used for oracle choice simulation
         # measure quality of fit
         Qat10 = []
         Qat20 = []
-        Qat30 = []
         te_pred = get_U(best_recsys, te_data)
         for n in range(N):
             tr_cn = np.array(tr_data.user_data[n][0], dtype="i8")
@@ -118,54 +126,17 @@ if __name__ == "__main__":
             # eval recall just at test items
             Qat10.append(myrecall(te_cn, argtopk(te_pred[n,:], k=10)))
             Qat20.append(myrecall(te_cn, argtopk(te_pred[n,:], k=20)))
-            Qat30.append(myrecall(te_cn, argtopk(te_pred[n,:], k=30)))
         print(f"--------------------\n"
               f"recall@10={np.mean(Qat10):.4f} +/- {np.std(Qat10):.4f}\n"
-              f"recall@20={np.mean(Qat20):.4f} +/- {np.std(Qat20):.4f}\n"
-              f"recall@30={np.mean(Qat30):.4f} +/- {np.std(Qat30):.4f}\n")
-    del best_recsys, tr_data, te_data
-
-    # -------------------------------------------------------------------------
-
-    # containers with artefacts
-    CF_true_data_map: dict[str,np.ndarray] = {"y": y}
-    CF_pred_data_map: dict[str,dict[str,np.ndarray]] = {"y": {}, **{key: {} for key in CF_map}}
-
-    # -------------------------------------------------------------------------
-
-    print(f"\nRETRAINING ORACLE (TRUE) MODELS WITH THE OPTIMAL HYPERPARAMETERS\n")
-
-    # make all data to retrain CFs with the best hyperparameters
-    true_data = prepare_positive_feedback_data(y, uid_map, iid_map)
-
-    # this code imitates the true oracle preferences for collected users
-    u_true = np.zeros(y.shape, dtype="f8")
-    for key in CF_map:
-        print(f"Retraining true preferences for {key} INIT.")
-        # score user preferences for each (n,j)-pair
-        recsys = CF_map[key].clone(CF_best_params_map[key])
-        recsys.fit(true_data)
-        u_true[:,:] = get_U(recsys, true_data)
-        CF_true_data_map[key] = np.copy(u_true)
-        # measure quality of fit
-        Qat10 = []
-        Qat20 = []
-        Qat30 = []
-        for n in range(N):
-            cn_true = argnonz(y[n,:])
-            Qat10.append(myrecall(cn_true, argtopk(u_true[n,:], k=10)))
-            Qat20.append(myrecall(cn_true, argtopk(u_true[n,:], k=20)))
-            Qat30.append(myrecall(cn_true, argtopk(u_true[n,:], k=30)))
-        print(f"Retraining true preferences for {key} DONE."
-              f"\n"
-              f"recall@10={np.mean(Qat10):.4f} +/- {np.std(Qat10):.4f}\n"
-              f"recall@20={np.mean(Qat20):.4f} +/- {np.std(Qat20):.4f}\n"
-              f"recall@30={np.mean(Qat30):.4f} +/- {np.std(Qat30):.4f}\n")
-    del recsys, true_data, u_true
+              f"recall@20={np.mean(Qat20):.4f} +/- {np.std(Qat20):.4f}\n")
+    del tr_data, te_data
 
     # -------------------------------------------------------------------------
 
     print(f"\nESTIMATING PARTIAL UTILITY (BASED ON K GATHERED CHOICES)\n")
+
+    # containers with artefacts
+    CF_pred_data_map: dict[str,dict[str,np.ndarray]] = {"y": {}, **{key: {} for key in CF_map}}
 
     # model limited knowledge about user with partially revealed feedback
     for k in gathered_k_choice_arr:
@@ -189,7 +160,7 @@ if __name__ == "__main__":
         # preference learning mechanism based on collaborative filtering (CF) techniques
         # only implicit feedback is available in collected data =>
         # CF algorithms should work with implicit {0,1} signal
-        pred_data = prepare_positive_feedback_data(y_pred, uid_map, iid_map)
+        pred_data = prepare_positive_feedback_data(y_pred, uid_map, iid_map, seed=args.seed)
 
         for key in CF_map:
             # score user preferences for each (n,j)-pair
@@ -197,7 +168,7 @@ if __name__ == "__main__":
             recsys.fit(pred_data)
             u_pred[:,:] = get_U(recsys, pred_data)
             CF_pred_data_map[key][str(k)] = np.copy(u_pred)
-        del recsys, pred_data
+        del pred_data
         print(f"Fit {k}-items DONE.")
 
     # -------------------------------------------------------------------------
