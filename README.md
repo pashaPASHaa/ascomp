@@ -1,14 +1,14 @@
 ### Positive-Sum Impact of Multistakeholder Recommendations for Urban Tourism
-This repository contains source code for replicating experiments for the 
-Applied Soft Computing (special issue, Recommender Systems: Methodology Update) journal.
+This repository contains source code for replicating experiments for 
+Applied Soft Computing (special issue, Recommender Systems: Methodology Update) Journal.
 
 ##### In case you plan to replicate experiments
 
-Download this repository and original datasets:
+0.a. Download this repository and original datasets:
 - <https://github.com/igobrilhante/TripBuilder> (full)
 - <https://sites.google.com/site/yangdingqi/home/foursquare-dataset> (global-scale check-in dataset)
 
-Prepare `ascomp` directory structure and unpack data:
+0.b. Prepare `ascomp` directory structure and unpack data:
 ```
 (ascomp)
 |-- data
@@ -56,7 +56,6 @@ Prepare `ascomp` directory structure and unpack data:
     |-- run1.py
     |-- run1_co.py
     |-- run1_rb.py
-    |-- run1_recbole.py
     |-- run2.py
     |-- runx.py
     |-- runx_batch.py
@@ -65,7 +64,7 @@ Prepare `ascomp` directory structure and unpack data:
     `-- utils.py
 ```
 
-0. Run from `ascomp` directory:
+0.c. Run from `ascomp` directory:
 ```
 python3 src/proc_Flickr.py
 python3 src/proc_Foursquare.py
