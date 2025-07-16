@@ -1,8 +1,7 @@
 import argparse
-import jax
-import jax.numpy as jnp
 import numpy as np
-import optax
+import torch
+import torch.nn.functional as F
 
 from numba import njit, i8, f8
 from datafactory import load_util_artefacts, dump_aset_artefacts
@@ -27,11 +26,9 @@ from utils import argnonz, argtopk, myrecall, rand_member_arr_nb, seedutils
 """
 
 
-TOPK_ALL = 10  # number of top items known for every user
 beta_max = gamma_max = 5.0
 
 
-@jax.jit
 def logp_fn(params, u, u_thr, P_aset):
     """
     Probability that the user will add item j to his consideration set:
@@ -40,26 +37,23 @@ def logp_fn(params, u, u_thr, P_aset):
     Probability that the user will eventually select item j:
         p[j] = pi[j] * exp(beta u[j]) / sum(pi[k] * exp(beta u[k]))
     """
-
-    _d = None
-
-    # normalize
-    beta, gamma = jnp.clip(params["beta"], 0, beta_max)[:,_d], jnp.clip(params["gamma"], 0, gamma_max)[:,_d]
+    # clamp parameters to their valid range [0, max] and add a dimension for broadcasting
+    beta  = torch.clamp(params["beta" ], 0,  beta_max).unsqueeze(1)
+    gamma = torch.clamp(params["gamma"], 0, gamma_max).unsqueeze(1)
 
     # probability to add item to consideration set
-    pi = jax.nn.sigmoid(gamma*(u - u_thr[:,_d])) * P_aset
+    pi = torch.sigmoid( gamma * (u - u_thr.unsqueeze(1)) ) * P_aset
 
     # log probability of choice
-    logp = jax.nn.log_softmax(jnp.maximum(-gamma_max, jnp.log(pi)) + beta * u, axis=1)
+    logp = F.log_softmax(torch.maximum((-1)*torch.tensor(gamma_max), torch.log(pi)) + beta * u, dim=1)
 
     return logp
 
 
-@jax.jit
 def llik_fn(params, y, u, u_thr, P_aset):
-    a = jnp.sum(y, axis=1, keepdims=True)
-    L = jnp.sum(logp_fn(params, u, u_thr, P_aset) - jnp.log(1/a), where=(y == 1), axis=1).mean()  # --> max
-    return L
+    a = torch.sum(y, dim=1, keepdim=True)
+    l = torch.sum((logp_fn(params, u, u_thr, P_aset) - torch.log(1/a)) * y, dim=1).mean()  # -> max
+    return l
 
 
 def learn_PIAL(y, u, u_thr, P_aset, te_y):
@@ -68,56 +62,50 @@ def learn_PIAL(y, u, u_thr, P_aset, te_y):
 
     # -------------------------------------------------------------------------
 
-    n_epochs = 5000
-    n_epochs_print = 1000
+    n_epochs = 2000
+    n_epochs_print = 250
 
+    # convert numpy input arrays to torch tensors
+    y      = torch.from_numpy(y     ).float()
+    u      = torch.from_numpy(u     ).float()
+    u_thr  = torch.from_numpy(u_thr ).float()
+    P_aset = torch.from_numpy(P_aset).float()
+    te_y   = torch.from_numpy(te_y  ).float()
+
+    # initialize learnable parameters
     params = {
-        "beta": jnp.ones(len(y), dtype="f4") * beta_max, "gamma": jnp.ones(len(y), dtype="f4") * gamma_max,
+        "beta" : torch.full((len(y),),  beta_max, dtype=torch.float32, requires_grad=True),
+        "gamma": torch.full((len(y),), gamma_max, dtype=torch.float32, requires_grad=True),
     }
 
-    # -------------------------------------------------------------------------
+    # initialize optimizer with the parameter tensors
+    optimizer = torch.optim.Adam(params.values(), lr=1e-2)
 
-    # step decay lr sheduler: lr = warmup + 1e-2 * (0.8)**(count//2500)
-    # maps count to lr
-    lr = optax.warmup_exponential_decay_schedule(
-        init_value=5e-4,
-        peak_value=5e-3, warmup_steps=1000, transition_steps=1000, decay_rate=0.8, staircase=True, end_value=5e-4,
-    )
-    # optimizer
-    chain = optax.chain(
-        optax.clip(1.),
-        optax.adam(lr),
-    )
-    optim = optax.multi_transform(
-        {
-            "T": chain,
-            "F": optax.set_to_zero()
-        },
-        param_labels={"beta": "T", "gamma": "T"},
-    )
-    state = optim.init(params)
-
-    # -------------------------------------------------------------------------
-
-    llik = -np.inf
+    # training loop
     for epoch in range(n_epochs):
-        llik, grad = jax.value_and_grad(llik_fn)(params, y, u, u_thr, P_aset)
-        params_update, state = optim.update(grad, state)
-        params = jax.tree.map(lambda p, u: (p-u), params, params_update)  # updated learnable parameters after SGD step
 
-        if ((epoch+1) % n_epochs_print == 0):
-            te_llik = llik_fn(params, te_y, u, u_thr, P_aset)
-            print(f"#n={epoch+1:>05d} lr={lr(epoch):.4f} | tr_llik={llik:>8.4f} te_llik={te_llik:>8.4f}")
+        optimizer.zero_grad()
+        loss = (-1) * llik_fn(params, y, u, u_thr, P_aset)
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(params.values(), max_norm=1.0)
+        optimizer.step()  # update model parameters inplace
 
-    # -------------------------------------------------------------------------
+        if ((epoch + 1) % n_epochs_print == 0):
+            with torch.no_grad():
+                te_loss = (-1) * llik_fn(params, te_y, u, u_thr, P_aset)
+            print(f"#n={epoch+1:>05d} tr_llik={(-1)*loss.item():>8.4f} te_llik={(-1)*te_loss.item():>8.4f}")
 
+    # final evaluation and results
+    with torch.no_grad():
+        tr_llik = llik_fn(params,    y, u, u_thr, P_aset).item()
+        te_llik = llik_fn(params, te_y, u, u_thr, P_aset).item()
+
+    # extract learned parameters and convert back to numpy
     learned_params = {
-        "beta"  : np.array(params["beta" ], dtype="f8"),
-        "gamma" : np.array(params["gamma"], dtype="f8"),
-        "u_thr" : u_thr}
-
-    tr_llik = llik
-    te_llik = llik_fn(params, te_y, u, u_thr, P_aset)
+        "beta" : torch.clamp(params["beta" ], 0,  beta_max).detach().numpy(),
+        "gamma": torch.clamp(params["gamma"], 0, gamma_max).detach().numpy(),
+        "u_thr": u_thr.numpy(),
+    }
 
     return learned_params, tr_llik, te_llik
 
@@ -143,8 +131,6 @@ def learn(y, iou_mat, u, pop_lamb, delta, te_y):
         # sample from an awareness distribution
         # guarantee that y in A
         A[n,np.random.random(J) < P_aset[n,:]+y[n,:]] = 1
-    # add topk items guaranteed in A due to their everywhere popularity
-    A[:,:TOPK_ALL] = 1
 
     return learned_params, A, P_aset, tr_llik, te_llik
 
@@ -292,8 +278,8 @@ if __name__ == "__main__":
         # params search
         best_score = best_pop_lamb = best_delta = -np.inf
 
-        for pop_lamb in [0.1, 0.3, 0.5, 0.7, 0.9]:
-            for delta in [0.1, 0.3, 0.5, 0.7, 0.9]:
+        for pop_lamb in [0.5, 0.7, 0.9, 0.99]:
+            for delta in [0.01, 0.1, 0.3, 0.5, 0.7]:
                 print(f"pop_lamb={pop_lamb:.2f} delta={delta:.2f}")
 
                 _, _, _, tr_llik, te_llik = learn(
@@ -310,10 +296,10 @@ if __name__ == "__main__":
                     best_delta = delta
                     best_score = te_llik
 
-                print(f"current "
+                print(f"\tcurrent "
                       f"tr_llik={tr_llik:8.4f} "
                       f"te_llik={te_llik:8.4f} "
-                      f"******** best te_llik={best_score:8.4f} pop_lamb={best_pop_lamb} delta={best_delta}")
+                      f"******** best te_llik={best_score:8.4f} pop_lamb={best_pop_lamb} delta={best_delta}\n")
         del tr_llik, te_llik, best_score, pop_lamb, delta
 
         # retraining with the best parameters
