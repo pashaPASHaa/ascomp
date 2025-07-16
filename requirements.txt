@@ -5,3 +5,4 @@ numpy==1.26.4
 optuna==4.3.0
 polars==1.22.0
 torch==2.4.0
+recbole==1.2.1
